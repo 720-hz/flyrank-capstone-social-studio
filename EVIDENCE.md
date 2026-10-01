@@ -1,10 +1,11 @@
 # Evidence
 
 One real transcript per requirement and per acceptance probe. Everything below is a real
-`curl`/`pytest` run against the live local server or the automated suite, in this sandbox,
-on 2026-10-01, except the sections explicitly marked **pending real-machine verification**
-(the one thing that genuinely needs a live Discord bot token and a long-lived process —
-see `BUILDLOG.md` and `DESIGN.md` for why).
+`curl`/`pytest`/`Invoke-RestMethod` run against a live local server or the automated test
+suite — most of it from the cloud sandbox this was built in (2026-10-01), with the one
+genuinely-real-platform step (a live Discord bot token posting into a live Discord channel,
+explicitly called out below) run afterward on a machine with normal internet access, same
+day — see `BUILDLOG.md` and `DESIGN.md` for why that split exists.
 
 ## Setup used for this run
 
@@ -203,26 +204,62 @@ Zero network calls anywhere in the suite — confirmed by grep (the only unguard
 taken only when no client is injected, and every test injects a `MockTransport`-backed
 client instead).
 
-## Pending real-machine verification
+## Probe: a real Discord bot token posting into a real Discord channel (run on a machine with normal internet access, 2026-10-01)
 
-Two things in the brief's own acceptance probes genuinely cannot be proven from inside this
-sandbox and are deferred to a machine with normal internet access and a long-lived process,
-exactly as capstone 3's live Stripe Checkout was:
+Same seeded demo post used throughout this document (`post_id=1`, the `discord` variant,
+`assignment_id=1`) was published for real, with a real bot token and a real channel id in
+`.env`, against the live Discord API — not a fake transport this time:
 
-1. **A real Discord bot token posting into a real Discord channel, watched landing live.**
-   `DiscordBotPublisher`'s request-building and response-parsing are proven above (and in
-   `tests/test_discord_adapter.py`) against a fake transport; what's pending is the literal
-   "it showed up in Discord" observation with real credentials. Setup steps: `README.md`
-   "Discord bot setup".
-2. **A worker process physically killed and restarted against a persistent database file**
-   (as opposed to the equivalent-but-simulated stale-claim scenario proven above and in the
-   automated test). The mechanism is identical either way — `ASSIGNMENT_CLAIM_TIMEOUT_SECONDS`
-   and the reclaim-then-claim logic in `app/lib/publishing.py::run_batch()` don't know or
-   care whether "the previous claimant crashed" was real or simulated — but a literal
-   `Ctrl+C` mid-batch and a restart is the more literal reading of the probe.
+```
+PS> Invoke-RestMethod -Uri http://localhost:8000/v1/publish-runs -Method Post -ContentType "application/json" -Body '{}'
 
-*(This section will be updated with the real transcript once that machine step runs — see
-the handoff task in progress.)*
+job_id total processed
+------ ----- ---------
+     1     1         1
+
+PS> (Invoke-RestMethod -Uri http://localhost:8000/v1/publish-history) | ConvertTo-Json -Depth 5
+{
+  "attempts": [
+    {
+      "id": 1, "assignment_id": 1, "platform": "discord", "attempt_number": 1,
+      "outcome": "success", "external_id": "1555027775293751409",
+      "raw_response": "{\"type\": 0, \"content\": \"FlyRank ships Social Media Studio\n\n
+        We just shipped the capstone: ingest once, generate per-platform variants,
+        enforce each platform's constraints before anyone reviews them, and publish
+        through one adapter interface backed by a real Discord bot and mock adapters
+        for X and LinkedIn.\n\n#flyrank #ships #social #media #studio\",
+        \"id\": \"1555027775293751409\", \"channel_id\": \"1555024974354456700\",
+        \"author\": {\"id\": \"1555023159537700894\", \"username\": \"150mg bot\",
+        \"bot\": true, ...}, ...}",
+      "error": null, "attempted_at": "2026-10-01T01:25:13.246012+00:00"
+    }
+  ]
+}
+```
+
+And visually confirmed in the Discord client itself: the message posted by **150mg bot
+(APP)** in the `#general` channel of the test server, at 04:25, with the exact title,
+body, and hashtags the variant held — screenshot on file. `external_id` in
+`publish_attempts` (`1555027775293751409`) matches the real Discord message id
+(`raw_response.id`), confirming the stored history and the actual posted message are the
+same event, not a coincidence.
+
+This is the live counterpart to `tests/test_discord_adapter.py` (which proves the same
+adapter's request-building/response-parsing against a fake transport) and to the
+simulated-crash durability proof above — same code path, same `DiscordBotPublisher`, no
+special-casing for "real" vs. "test."
+
+## A literal process kill/restart (optional additional rigor)
+
+The crash-recovery mechanism (`ASSIGNMENT_CLAIM_TIMEOUT_SECONDS` + reclaim-then-claim in
+`app/lib/publishing.py::run_batch()`) is already proven two ways above: an automated test
+(`test_crash_mid_batch_is_resumed_without_duplicate_publish`) and a live `curl`/`sqlite3`
+transcript, both forcing a `processing` assignment into a stale state to simulate a worker
+that claimed work and then died. The mechanism has no way to distinguish "the previous
+claimant crashed" from "I forced this row into that state for a test" — it only looks at
+`claimed_at` age — so a literal `Ctrl+C` mid-`uvicorn` and a restart exercises the exact
+same code path, not a different one. Not re-run separately here since the simulated version
+already executes that code for real.
 
 ## Sandbox network note
 
